@@ -1,0 +1,129 @@
+---
+- name: Set up Flask Application on EC2
+  hosts: webserver
+  become: yes
+  vars:
+    flask_app_repo: 'https://github.com/codeplatoon-devops/todolist-flask.git'
+    app_dir: '/var/www/todolist-flask'
+    db_name: 'todo_db'
+    db_user: 'todo_user'
+    db_password: 'securepassword'
+
+  tasks:
+    - name: Update and upgrade the system
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install required system packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-dev
+          - git
+          - mysql-server
+          - mysql-client
+          - libmysqlclient-dev
+          - python3-mysqldb
+          - gcc
+          - pkg-config
+          - default-libmysqlclient-dev
+        state: present
+
+    - name: Start MySQL service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Get MySQL root password status
+      shell: mysql -u root -e "SELECT 1"
+      register: mysql_status
+      ignore_errors: yes
+
+    - name: Initialize MySQL root password
+      shell: |
+        mysql -u root <<EOF
+        ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;
+        FLUSH PRIVILEGES;
+        EOF
+      when: mysql_status.rc == 0
+
+    - name: Create MySQL database
+      mysql_db:
+        name: '{{ db_name }}'
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Create MySQL user with full privileges
+      mysql_user:
+        name: '{{ db_user }}'
+        password: '{{ db_password }}'
+        priv: '{{ db_name }}.*:ALL'
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+    - name: Clone Flask application
+      git:
+        repo: '{{ flask_app_repo }}'
+        dest: '{{ app_dir }}'
+        version: master
+        force: yes
+
+    - name: Install pip packages
+      pip:
+        name:
+          - mysqlclient
+          - gunicorn
+        executable: pip3
+        state: present
+
+    - name: Install Python dependencies
+      pip:
+        requirements: '{{ app_dir }}/requirements.txt'
+        executable: pip3
+
+    - name: Configure environment variables
+      copy:
+        dest: '{{ app_dir }}/.env'
+        content: |
+          DB_HOST=localhost
+          DB_NAME={{ db_name }}
+          DB_USER={{ db_user }}
+          DB_PASSWORD={{ db_password }}
+        mode: '0600'
+
+    - name: Create Gunicorn systemd service
+      copy:
+        dest: /etc/systemd/system/flask-app.service
+        content: |
+          [Unit]
+          Description=Gunicorn instance to serve Flask application
+          After=network.target
+
+          [Service]
+          User=www-data
+          Group=www-data
+          WorkingDirectory={{ app_dir }}
+          Environment="PATH=/usr/local/bin"
+          ExecStart=/usr/local/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 todo:app
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Ensure correct permissions
+      file:
+        path: '{{ app_dir }}'
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Start and enable Gunicorn service
+      systemd:
+        name: flask-app
+        state: started
+        enabled: yes
+        daemon_reload: yes

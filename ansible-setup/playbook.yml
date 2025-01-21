@@ -1,0 +1,109 @@
+---
+- name: Setup Flask Application and MySQL Database
+  hosts: all
+  become: yes
+  tasks:
+    # Update and upgrade the system
+    - name: Update and upgrade the system
+      dnf:
+        name: '*'
+        state: latest
+        update_cache: yes
+
+    # Install Python and Pip
+    - name: Install Python and Pip
+      dnf:
+        name:
+          - python3
+          - python3-pip
+        state: present
+
+    # Add MySQL Community Repository
+    - name: Download MySQL Community Repository RPM
+      get_url:
+        url: https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm
+        dest: /tmp/mysql80-community-release.rpm
+
+    - name: Install MySQL Community Repository
+      command: yum localinstall -y /tmp/mysql80-community-release.rpm
+
+    # Install MySQL and its dependencies
+    - name: Install MySQL and development tools
+      dnf:
+        name:
+          - mysql-server
+          - mysql-community-devel
+          - gcc
+          - python3-devel
+        state: present
+
+    - name: Start and enable MySQL service
+      systemd:
+        name: mysqld
+        state: started
+        enabled: yes
+
+    # Upgrade Pip
+    - name: Upgrade pip3 to the latest version
+      pip:
+        name: pip
+        state: latest
+        executable: pip3
+
+    # Install Flask dependencies
+    - name: Install Flask dependencies
+      pip:
+        name:
+          - flask
+          - flask-mysql
+          - pymysql
+          - cryptography
+        state: present
+        executable: pip3
+
+    # Set up MySQL database
+    - name: Set up MySQL database for Flask application
+      mysql_db:
+        name: flask_app_db
+        state: present
+
+    - name: Create a MySQL user for Flask application
+      mysql_user:
+        name: flask_user
+        password: securepassword
+        priv: 'flask_app_db.*:ALL'
+        state: present
+
+    # Deploy Flask Application
+    - name: Copy Flask application to target node
+      copy:
+        src: /path/to/your/flask/app
+        dest: /var/www/flask_app
+        owner: ec2-user
+        group: ec2-user
+        mode: '0755'
+
+    - name: Configure Flask application environment
+      template:
+        src: /path/to/your/env.template
+        dest: /var/www/flask_app/.env
+        owner: ec2-user
+        group: ec2-user
+        mode: '0644'
+
+    - name: Start Flask application with Gunicorn
+      command: >
+        gunicorn --bind 0.0.0.0:5000 wsgi:app
+      args:
+        chdir: /var/www/flask_app
+      register: flask_start
+
+    # Validate Flask Application
+    - name: Ensure Flask application is running
+      uri:
+        url: http://{{ inventory_hostname }}:5000
+        return_content: yes
+      register: flask_status
+
+    - debug:
+        msg: 'Flask application is running: {{ flask_status.status }}'
