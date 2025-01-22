@@ -3,127 +3,106 @@
   hosts: webserver
   become: yes
   vars:
-    flask_app_repo: 'https://github.com/codeplatoon-devops/todolist-flask.git'
-    app_dir: '/var/www/todolist-flask'
-    db_name: 'todo_db'
-    db_user: 'todo_user'
-    db_password: 'securepassword'
+    flask_app_repo: 'https://github.com/mikhail-w/-todolist-flask.git'
+    app_dir: '/opt/todolist-flask'
+    mysql_user: 'chandra'
+    mysql_password: 'Chandra@123'
+    mysql_database: 'todo_db'
 
   tasks:
-    - name: Update and upgrade the system
+    - name: Update apt cache
       apt:
         update_cache: yes
-        upgrade: dist
 
-    - name: Install required system packages
+    - name: Install required packages
       apt:
         name:
           - python3
           - python3-pip
-          - python3-dev
-          - git
+          - python3-venv
           - mysql-server
-          - mysql-client
-          - libmysqlclient-dev
           - python3-mysqldb
-          - gcc
-          - pkg-config
-          - default-libmysqlclient-dev
+          - git
+          - nginx
         state: present
 
-    - name: Start MySQL service
+    - name: Start and enable MySQL
       service:
         name: mysql
         state: started
         enabled: yes
 
-    - name: Get MySQL root password status
-      shell: mysql -u root -e "SELECT 1"
-      register: mysql_status
-      ignore_errors: yes
-
-    - name: Initialize MySQL root password
-      shell: |
-        mysql -u root <<EOF
-        ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;
-        FLUSH PRIVILEGES;
-        EOF
-      when: mysql_status.rc == 0
-
     - name: Create MySQL database
       mysql_db:
-        name: '{{ db_name }}'
+        name: '{{ mysql_database }}'
         state: present
         login_unix_socket: /var/run/mysqld/mysqld.sock
 
-    - name: Create MySQL user with full privileges
+    - name: Create MySQL user
       mysql_user:
-        name: '{{ db_user }}'
-        password: '{{ db_password }}'
-        priv: '{{ db_name }}.*:ALL'
-        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: '{{ mysql_user }}'
+        password: '{{ mysql_password }}'
+        priv: '{{ mysql_database }}.*:ALL'
+        host: localhost
         state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
 
     - name: Clone Flask application
       git:
         repo: '{{ flask_app_repo }}'
         dest: '{{ app_dir }}'
-        version: master
         force: yes
 
-    - name: Install pip packages
-      pip:
-        name:
-          - mysqlclient
-          - gunicorn
-        executable: pip3
-        state: present
+    - name: Create Python virtual environment
+      command:
+        cmd: python3 -m venv venv
+        chdir: '{{ app_dir }}'
+        creates: '{{ app_dir }}/venv'
 
-    - name: Install Python dependencies
+    - name: Install Python requirements
       pip:
         requirements: '{{ app_dir }}/requirements.txt'
-        executable: pip3
+        virtualenv: '{{ app_dir }}/venv'
 
-    - name: Configure environment variables
-      copy:
-        dest: '{{ app_dir }}/.env'
-        content: |
-          DB_HOST=localhost
-          DB_NAME={{ db_name }}
-          DB_USER={{ db_user }}
-          DB_PASSWORD={{ db_password }}
-        mode: '0600'
+    - name: Install python-dotenv
+      pip:
+        name: python-dotenv
+        virtualenv: '{{ app_dir }}/venv'
 
-    - name: Create Gunicorn systemd service
+    - name: Update Flask application configuration
+      lineinfile:
+        path: '{{ app_dir }}/todo.py'
+        regexp: '^(\s+)app.run\(.*\)'
+        line: '    app.run(host="0.0.0.0", port=5000)'
+        backrefs: yes
+
+    - name: Create systemd service file
       copy:
-        dest: /etc/systemd/system/flask-app.service
+        dest: /etc/systemd/system/todoapp.service
         content: |
           [Unit]
-          Description=Gunicorn instance to serve Flask application
+          Description=Flask Todo Application
           After=network.target
 
           [Service]
-          User=www-data
-          Group=www-data
+          User=ubuntu
           WorkingDirectory={{ app_dir }}
-          Environment="PATH=/usr/local/bin"
-          ExecStart=/usr/local/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 todo:app
+          Environment=PATH={{ app_dir }}/venv/bin
+          ExecStart={{ app_dir }}/venv/bin/python3 {{ app_dir }}/todo.py
           Restart=always
 
           [Install]
           WantedBy=multi-user.target
-        mode: '0644'
 
-    - name: Ensure correct permissions
-      file:
-        path: '{{ app_dir }}'
-        owner: www-data
-        group: www-data
-        recurse: yes
-
-    - name: Start and enable Gunicorn service
+    - name: Enable and start todo application
       systemd:
-        name: flask-app
-        state: started
+        name: todoapp
+        state: restarted
         enabled: yes
         daemon_reload: yes
+
+    - name: Allow port 5000 in UFW
+      ufw:
+        rule: allow
+        port: '5000'
+        proto: tcp

@@ -9,7 +9,7 @@ resource "aws_instance" "mikhail_flask_app" {
   vpc_security_group_ids = [aws_security_group.mikhail_flask_sg.id]
 
   tags = {
-    Name = "Mikhail_FlaskApp"
+    Name = "mikhail_flaskApp"
   }
 
   root_block_device {
