@@ -12,6 +12,7 @@
 - Terraform installed locally
 - Ansible installed locally
 - SSH key pair (`mikhail-east1.pem`)
+- Flask-App located [here](https://github.com/mikhail-w/-todolist-flask)
 
 ## Project Structure
 
